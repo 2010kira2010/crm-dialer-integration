@@ -1,0 +1,295 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: crm-dialer-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-crm_dialer}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - crm-dialer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: crm-dialer-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - crm-dialer-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # NATS Message Bus
+  nats:
+    image: nats:2.10-alpine
+    container_name: crm-dialer-nats
+    command: "-js -sd /data"
+    volumes:
+      - nats_data:/data
+    ports:
+      - "4222:4222"
+      - "8222:8222"  # HTTP monitoring
+    networks:
+      - crm-dialer-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./build/api-gateway/Dockerfile
+    container_name: crm-dialer-api-gateway
+    environment:
+      - PORT=8080
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - NATS_URL=nats://nats:4222
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+    volumes:
+      - ./web/build:/app/web/build:ro
+
+  # Webhook Service
+  webhook-service:
+    build:
+      context: .
+      dockerfile: ./build/webhook-service/Dockerfile
+    container_name: crm-dialer-webhook-service
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # CRM Service
+  crm-service:
+    build:
+      context: .
+      dockerfile: ./build/crm-service/Dockerfile
+    container_name: crm-dialer-crm-service
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - NATS_URL=nats://nats:4222
+      - AMOCRM_DOMAIN=${AMOCRM_DOMAIN}
+      - AMOCRM_CLIENT_ID=${AMOCRM_CLIENT_ID}
+      - AMOCRM_CLIENT_SECRET=${AMOCRM_CLIENT_SECRET}
+      - AMOCRM_REDIRECT_URI=${AMOCRM_REDIRECT_URI}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # Queue Service
+  queue-service:
+    build:
+      context: .
+      dockerfile: ./build/queue-service/Dockerfile
+    container_name: crm-dialer-queue-service
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # Flow Engine Service
+  flow-engine-service:
+    build:
+      context: .
+      dockerfile: ./build/flow-engine-service/Dockerfile
+    container_name: crm-dialer-flow-engine
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # Dialer Service
+  dialer-service:
+    build:
+      context: .
+      dockerfile: ./build/dialer-service/Dockerfile
+    container_name: crm-dialer-dialer-service
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - NATS_URL=nats://nats:4222
+      - DIALER_API_URL=${DIALER_API_URL}
+      - DIALER_API_KEY=${DIALER_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # Config Service
+  config-service:
+    build:
+      context: .
+      dockerfile: ./build/config-service/Dockerfile
+    container_name: crm-dialer-config-service
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crm_dialer}?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - crm-dialer-network
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: crm-dialer-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - crm-dialer-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: crm-dialer-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - crm-dialer-network
+
+  # Loki
+  loki:
+    image: grafana/loki:latest
+    container_name: crm-dialer-loki
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - crm-dialer-network
+
+  # Promtail
+  promtail:
+    image: grafana/promtail:latest
+    container_name: crm-dialer-promtail
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml
+      - /var/log:/var/log
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - crm-dialer-network
+
+networks:
+  crm-dialer-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+# .env.example
+# PostgreSQL
+  POSTGRES_USER=postgres
+  POSTGRES_PASSWORD=your-secure-password
+  POSTGRES_DB=crm_dialer
+  
+  # JWT
+  JWT_SECRET=your-jwt-secret-key
+  
+  # CORS
+  CORS_ORIGINS=http://localhost:3000
+  
+  # AmoCRM
+  AMOCRM_DOMAIN=your-domain.amocrm.ru
+  AMOCRM_CLIENT_ID=your-client-id
+  AMOCRM_CLIENT_SECRET=your-client-secret
+  AMOCRM_REDIRECT_URI=http://localhost:8080/auth/callback
+  
+  # Dialer System
+  DIALER_API_URL=https://your-dialer-api.com
+  DIALER_API_KEY=your-dialer-api-key
+  
+  # Grafana
+  GRAFANA_USER=admin
+  GRAFANA_PASSWORD=your-grafana-password
