@@ -2,6 +2,7 @@ package flowengine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go.uber.org/zap"
 	"strconv"
@@ -34,7 +35,47 @@ func (fe *FlowEngine) sendToDialer(ctx context.Context, actionData, inputData ma
 		zap.String("bucket_id", bucketID),
 		zap.Any("data", inputData))
 
-	// TODO: Implement actual dialer API call
+	// Подготавливаем контакт
+	contact := map[string]interface{}{
+		"phone": "",
+		"name":  "",
+		"email": "",
+	}
+
+	// Извлекаем данные контакта
+	if contactData, ok := inputData["contact"].(map[string]interface{}); ok {
+		if phone, ok := contactData["phone"].(string); ok {
+			contact["phone"] = phone
+		}
+		if name, ok := contactData["name"].(string); ok {
+			contact["name"] = name
+		}
+		if email, ok := contactData["email"].(string); ok {
+			contact["email"] = email
+		}
+	}
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"scheduler_id": schedulerID,
+			"campaign_id":  campaignID,
+			"bucket_id":    bucketID,
+			"contact":      contact,
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("dialer.send_contact", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Contact sent to dialer queue")
+	}
+
 	return nil
 }
 

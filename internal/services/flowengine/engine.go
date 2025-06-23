@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
+
+	"crm-dialer-integration/internal/repository"
 )
 
 type FlowEngine struct {
 	logger *zap.Logger
+	repo   *repository.Repository
+	nc     *nats.Conn
 }
 
 type FlowNode struct {
@@ -34,9 +39,18 @@ type FlowConfig struct {
 	Edges []FlowEdge `json:"edges"`
 }
 
-func NewFlowEngine(logger *zap.Logger) *FlowEngine {
+func NewFlowEngine(logger *zap.Logger, repo *repository.Repository) *FlowEngine {
 	return &FlowEngine{
 		logger: logger,
+		repo:   repo,
+	}
+}
+
+func NewFlowEngineWithNATS(logger *zap.Logger, repo *repository.Repository, nc *nats.Conn) *FlowEngine {
+	return &FlowEngine{
+		logger: logger,
+		repo:   repo,
+		nc:     nc,
 	}
 }
 
@@ -160,5 +174,34 @@ func (fe *FlowEngine) findNodeByID(nodeID string, config *FlowConfig) *FlowNode 
 			return &node
 		}
 	}
+	return nil
+}
+
+func (fe *FlowEngine) ProcessEvent(ctx context.Context, event map[string]interface{}) error {
+	// Получаем активные потоки из базы данных
+	flows, err := fe.repo.GetIntegrationFlows(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get flows: %w", err)
+	}
+
+	// Обрабатываем событие через каждый активный поток
+	for _, flow := range flows {
+		if !flow.IsActive {
+			continue
+		}
+
+		fe.logger.Info("Processing event through flow",
+			zap.String("flow_id", flow.ID),
+			zap.String("flow_name", flow.Name))
+
+		// Выполняем поток
+		if _, err := fe.ExecuteFlow(ctx, flow.FlowData, event); err != nil {
+			fe.logger.Error("Failed to execute flow",
+				zap.String("flow_id", flow.ID),
+				zap.Error(err))
+			// Продолжаем с другими потоками
+		}
+	}
+
 	return nil
 }

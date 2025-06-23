@@ -33,15 +33,15 @@ func main() {
 		log.Fatal("Failed to initialize repository", zap.Error(err))
 	}
 
-	// Initialize Flow Engine
-	engine := flowengine.NewFlowEngine(log, repo)
-
 	// Initialize NATS
 	nc, err := nats.Connect(cfg.NatsURL)
 	if err != nil {
 		log.Fatal("Failed to connect to NATS", zap.Error(err))
 	}
 	defer nc.Close()
+
+	// Initialize Flow Engine with NATS
+	engine := flowengine.NewFlowEngineWithNATS(log, repo, nc)
 
 	// Subscribe to lead events
 	_, err = nc.Subscribe("webhooks.amocrm.lead_*", func(msg *nats.Msg) {

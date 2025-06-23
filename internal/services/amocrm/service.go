@@ -205,7 +205,13 @@ func (s *Service) ExchangeCode(ctx context.Context, code string) error {
 
 // GetToken возвращает текущий токен (для внутреннего использования)
 func (s *Service) GetToken() amocrm.Token {
-	return s.client.GetToken()
+	// Поскольку в библиотеке нет метода GetToken, возвращаем загруженный токен
+	token, err := s.loadToken()
+	if err != nil {
+		s.logger.Error("Failed to load token", zap.Error(err))
+		return nil
+	}
+	return token
 }
 
 // SetTokens устанавливает токены (для загрузки сохраненных токенов)
