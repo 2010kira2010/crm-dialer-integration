@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"strconv"
+	"time"
 
+	amocrmLib "github.com/2010kira2010/amocrm"
 	"github.com/gofiber/fiber/v2"
 	"go.uber.org/zap"
 
 	"crm-dialer-integration/internal/repository"
 	"crm-dialer-integration/internal/services/amocrm"
+	"crm-dialer-integration/pkg/config"
 )
 
 type CRMHandler struct {
@@ -16,15 +19,22 @@ type CRMHandler struct {
 	logger        *zap.Logger
 }
 
-func SetupCRMRoutes(router fiber.Router, logger *zap.Logger) {
-	// TODO: Properly inject dependencies
+func SetupCRMRoutes(router fiber.Router, cfg *config.Config, repo *repository.Repository, logger *zap.Logger) {
+	// Initialize AmoCRM service
+	amocrmService, err := amocrm.NewService(cfg, logger)
+	if err != nil {
+		logger.Error("Failed to initialize AmoCRM service", zap.Error(err))
+	}
+
 	handler := &CRMHandler{
-		logger: logger,
+		amocrmService: amocrmService,
+		repo:          repo,
+		logger:        logger,
 	}
 
 	crm := router.Group("/amocrm")
 
-	// OAuth endpoints
+	// OAuth endpoints (эти эндпоинты должны быть публичными для callback)
 	crm.Get("/auth", handler.GetAuthURL)
 	crm.Get("/auth/callback", handler.AuthCallback)
 
@@ -40,9 +50,18 @@ func SetupCRMRoutes(router fiber.Router, logger *zap.Logger) {
 	// Contacts endpoints
 	crm.Get("/contacts", handler.GetContacts)
 	crm.Get("/contacts/:id", handler.GetContact)
+
+	// Status endpoint
+	crm.Get("/status", handler.GetStatus)
 }
 
 func (h *CRMHandler) GetAuthURL(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	state := c.Query("state", "default")
 	authURL := h.amocrmService.GetAuthURL(state)
 
@@ -52,6 +71,12 @@ func (h *CRMHandler) GetAuthURL(c *fiber.Ctx) error {
 }
 
 func (h *CRMHandler) AuthCallback(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	code := c.Query("code")
 	if code == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -66,12 +91,38 @@ func (h *CRMHandler) AuthCallback(c *fiber.Ctx) error {
 		})
 	}
 
+	// В реальном приложении здесь бы был редирект на фронтенд с успешным статусом
 	return c.JSON(fiber.Map{
 		"message": "Successfully authorized",
+		"status":  "success",
 	})
 }
 
+func (h *CRMHandler) GetStatus(c *fiber.Ctx) error {
+	status := fiber.Map{
+		"service":     "AmoCRM",
+		"initialized": h.amocrmService != nil,
+	}
+
+	if h.amocrmService != nil {
+		token := h.amocrmService.GetToken()
+		status["authorized"] = token != nil
+
+		if token != nil {
+			status["token_expires_at"] = token.ExpiresAt()
+		}
+	}
+
+	return c.JSON(status)
+}
+
 func (h *CRMHandler) GetFields(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	entityType := c.Query("entity_type", "leads")
 
 	// Сначала пробуем получить из базы данных
@@ -85,7 +136,8 @@ func (h *CRMHandler) GetFields(c *fiber.Ctx) error {
 		fields, err = h.amocrmService.GetCustomFields(c.Context(), entityType)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to get fields",
+				"error":   "Failed to get fields",
+				"details": err.Error(),
 			})
 		}
 
@@ -101,12 +153,19 @@ func (h *CRMHandler) GetFields(c *fiber.Ctx) error {
 }
 
 func (h *CRMHandler) SyncFields(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	entityType := c.Query("entity_type", "leads")
 
 	fields, err := h.amocrmService.GetCustomFields(c.Context(), entityType)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to sync fields",
+			"error":   "Failed to sync fields",
+			"details": err.Error(),
 		})
 	}
 
@@ -124,6 +183,12 @@ func (h *CRMHandler) SyncFields(c *fiber.Ctx) error {
 }
 
 func (h *CRMHandler) GetLeads(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	// Параметры пагинации
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "50"))
@@ -137,14 +202,21 @@ func (h *CRMHandler) GetLeads(c *fiber.Ctx) error {
 	if statusID := c.Query("status_id"); statusID != "" {
 		params["filter[status_id]"] = statusID
 	}
+	if pipelineID := c.Query("pipeline_id"); pipelineID != "" {
+		params["filter[pipeline_id]"] = pipelineID
+	}
 	if responsibleUserID := c.Query("responsible_user_id"); responsibleUserID != "" {
 		params["filter[responsible_user_id]"] = responsibleUserID
+	}
+	if query := c.Query("query"); query != "" {
+		params["query"] = query
 	}
 
 	leads, err := h.amocrmService.GetLeads(c.Context(), params)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get leads",
+			"error":   "Failed to get leads",
+			"details": err.Error(),
 		})
 	}
 
@@ -152,10 +224,17 @@ func (h *CRMHandler) GetLeads(c *fiber.Ctx) error {
 		"data":  leads,
 		"page":  page,
 		"limit": limit,
+		"count": len(leads),
 	})
 }
 
 func (h *CRMHandler) GetLead(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	leadID, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -166,7 +245,8 @@ func (h *CRMHandler) GetLead(c *fiber.Ctx) error {
 	lead, err := h.amocrmService.GetLeadByID(c.Context(), leadID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get lead",
+			"error":   "Failed to get lead",
+			"details": err.Error(),
 		})
 	}
 
@@ -174,6 +254,12 @@ func (h *CRMHandler) GetLead(c *fiber.Ctx) error {
 }
 
 func (h *CRMHandler) UpdateLead(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	leadID, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -192,36 +278,63 @@ func (h *CRMHandler) UpdateLead(c *fiber.Ctx) error {
 	lead, err := h.amocrmService.GetLeadByID(c.Context(), leadID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get lead",
+			"error":   "Failed to get lead",
+			"details": err.Error(),
 		})
 	}
 
 	// Обновляем поля
-	// TODO: Правильно мапить поля из updateData в lead
+	if name, ok := updateData["name"].(string); ok {
+		lead.Name = name
+	}
+	if price, ok := updateData["price"].(float64); ok {
+		lead.Price = int(price)
+	}
+	if statusID, ok := updateData["status_id"].(float64); ok {
+		lead.StatusID = int(statusID)
+	}
+
+	// Обновляем время модификации
+	lead.UpdatedAt = int(time.Now().Unix())
 
 	// Сохраняем изменения
-	if err := h.amocrmService.UpdateLeads(c.Context(), []*amocrm.Lead{lead}); err != nil {
+	if err := h.amocrmService.UpdateLeads(c.Context(), []*amocrmLib.Lead{lead}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to update lead",
+			"error":   "Failed to update lead",
+			"details": err.Error(),
 		})
 	}
 
 	return c.JSON(fiber.Map{
 		"message": "Lead updated successfully",
+		"lead":    lead,
 	})
 }
 
 func (h *CRMHandler) GetContacts(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	params := make(map[string]string)
 
 	if query := c.Query("query"); query != "" {
 		params["query"] = query
 	}
+	if limit := c.Query("limit"); limit != "" {
+		params["limit"] = limit
+	}
+	if page := c.Query("page"); page != "" {
+		params["page"] = page
+	}
 
 	contacts, err := h.amocrmService.GetContacts(c.Context(), params)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get contacts",
+			"error":   "Failed to get contacts",
+			"details": err.Error(),
 		})
 	}
 
@@ -229,6 +342,12 @@ func (h *CRMHandler) GetContacts(c *fiber.Ctx) error {
 }
 
 func (h *CRMHandler) GetContact(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
 	contactID, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -239,7 +358,8 @@ func (h *CRMHandler) GetContact(c *fiber.Ctx) error {
 	contact, err := h.amocrmService.GetContactByID(c.Context(), contactID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get contact",
+			"error":   "Failed to get contact",
+			"details": err.Error(),
 		})
 	}
 

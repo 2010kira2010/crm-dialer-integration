@@ -1,0 +1,62 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'api-gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['api-gateway:8080']
+        labels:
+          service: 'api-gateway'
+
+  - job_name: 'crm-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['crm-service:9090']
+        labels:
+          service: 'crm-service'
+
+  - job_name: 'webhook-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['webhook-service:9090']
+        labels:
+          service: 'webhook-service'
+
+  - job_name: 'flow-engine-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['flow-engine-service:9090']
+        labels:
+          service: 'flow-engine-service'
+
+  - job_name: 'dialer-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['dialer-service:9090']
+        labels:
+          service: 'dialer-service'
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+
+  - job_name: 'nats'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['nats:8222']
+        labels:
+          service: 'nats'

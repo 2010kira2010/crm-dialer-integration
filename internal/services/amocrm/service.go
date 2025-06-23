@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,90 +28,28 @@ type Service struct {
 	tokenPath  string
 }
 
-// TokenStorage реализация хранилища токенов
-type TokenStorage struct {
-	service *Service
-}
-
-// NewTokenStorage создает новое хранилище токенов
-func NewTokenStorage(service *Service) amocrm.TokenStorage {
-	return &TokenStorage{service: service}
-}
-
-// GetToken получает токен из хранилища
-func (ts *TokenStorage) GetToken() (amocrm.Token, error) {
-	ts.service.tokenMutex.RLock()
-	defer ts.service.tokenMutex.RUnlock()
-
-	data, err := os.ReadFile(ts.service.tokenPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var stored struct {
-		AccessToken  string    `json:"access_token"`
-		RefreshToken string    `json:"refresh_token"`
-		TokenType    string    `json:"token_type"`
-		ExpiresAt    time.Time `json:"expires_at"`
-	}
-
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, err
-	}
-
-	return amocrm.NewToken(
-		stored.AccessToken,
-		stored.RefreshToken,
-		stored.TokenType,
-		stored.ExpiresAt,
-	), nil
-}
-
-// SetToken сохраняет токен в хранилище
-func (ts *TokenStorage) SetToken(token amocrm.Token) error {
-	ts.service.tokenMutex.Lock()
-	defer ts.service.tokenMutex.Unlock()
-
-	stored := struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		TokenType    string `json:"token_type"`
-		ExpiresAt    int64  `json:"expires_at"`
-	}{
-		AccessToken:  token.AccessToken(),
-		RefreshToken: token.RefreshToken(),
-		TokenType:    token.TokenType(),
-		ExpiresAt:    token.ExpiresAt().Unix(),
-	}
-
-	data, err := json.MarshalIndent(stored, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// Создаем директорию если не существует
-	dir := filepath.Dir(ts.service.tokenPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(ts.service.tokenPath, data, 0600)
+// TokenStored структура для хранения токенов
+type TokenStored struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	TokenType    string    `json:"token_type"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // NewService создает новый сервис AmoCRM
 func NewService(cfg *config.Config, logger *zap.Logger) (*Service, error) {
+	servicePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
 	service := &Service{
 		logger:    logger,
 		config:    cfg,
-		tokenPath: filepath.Join("/tmp", "amocrm_token.json"),
+		tokenPath: filepath.Join(filepath.Dir(servicePath), "amocrm_token.json"),
 	}
 
-	// Создаем хранилище токенов
-	tokenStorage := NewTokenStorage(service)
-
 	// Создаем клиент AmoCRM
-	client := amocrm.NewWithStorage(
-		tokenStorage,
+	client := amocrm.New(
 		cfg.AmoCRMClientID,
 		cfg.AmoCRMClientSecret,
 		cfg.AmoCRMRedirectURI,
@@ -122,20 +62,97 @@ func NewService(cfg *config.Config, logger *zap.Logger) (*Service, error) {
 
 	service.client = client
 
-	// Пытаемся загрузить существующий токен
-	if token, err := tokenStorage.GetToken(); err == nil {
-		if err := client.SetToken(token); err != nil {
-			logger.Warn("Failed to set loaded token", zap.Error(err))
-		} else {
-			logger.Info("Token loaded successfully",
-				zap.Time("expires_at", token.ExpiresAt()))
-		}
+	// Загружаем или получаем токен
+	if err := service.initializeToken(); err != nil {
+		logger.Error("Failed to initialize token", zap.Error(err))
+		// Не возвращаем ошибку, так как токен может быть получен позже через OAuth
 	}
 
 	// Запускаем задачу проверки токена
 	service.startTokenRefreshTask()
 
 	return service, nil
+}
+
+// initializeToken загружает существующий токен или получает новый через код авторизации
+func (s *Service) initializeToken() error {
+	// Пытаемся загрузить существующий токен
+	if token, err := s.loadToken(); err == nil && token != nil {
+		if err := s.client.SetToken(token); err != nil {
+			return fmt.Errorf("failed to set loaded token: %w", err)
+		}
+		s.logger.Info("Token loaded successfully",
+			zap.Time("expires_at", token.ExpiresAt()))
+		return nil
+	}
+
+	// Если токена нет и есть код авторизации, получаем токен
+	if s.config.AmoCRMAuthCode != "" {
+		token, err := s.client.TokenByCode(s.config.AmoCRMAuthCode)
+		if err != nil {
+			return fmt.Errorf("failed to get token by code: %w", err)
+		}
+
+		// Сохраняем токен
+		if err := s.saveToken(token); err != nil {
+			s.logger.Error("Failed to save token", zap.Error(err))
+		}
+
+		s.logger.Info("Token obtained and saved",
+			zap.Time("expires_at", token.ExpiresAt()))
+		return nil
+	}
+
+	return fmt.Errorf("no token available and no auth code provided")
+}
+
+// loadToken загружает токен из файла
+func (s *Service) loadToken() (amocrm.Token, error) {
+	s.tokenMutex.RLock()
+	defer s.tokenMutex.RUnlock()
+
+	data, err := os.ReadFile(s.tokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var stored TokenStored
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, err
+	}
+
+	return amocrm.NewToken(
+		stored.AccessToken,
+		stored.RefreshToken,
+		stored.TokenType,
+		stored.ExpiresAt,
+	), nil
+}
+
+// saveToken сохраняет токен в файл
+func (s *Service) saveToken(token amocrm.Token) error {
+	s.tokenMutex.Lock()
+	defer s.tokenMutex.Unlock()
+
+	stored := TokenStored{
+		AccessToken:  token.AccessToken(),
+		RefreshToken: token.RefreshToken(),
+		TokenType:    token.TokenType(),
+		ExpiresAt:    token.ExpiresAt(),
+	}
+
+	data, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Создаем директорию если не существует
+	dir := filepath.Dir(s.tokenPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	return os.WriteFile(s.tokenPath, data, 0600)
 }
 
 // startTokenRefreshTask запускает задачу обновления токена
@@ -157,18 +174,15 @@ func (s *Service) CheckAndRefreshToken() error {
 	// Проверяем токен
 	if err := s.client.CheckToken(); err != nil {
 		s.logger.Info("Token needs refresh", zap.Error(err))
-
-		// Токен автоматически обновится внутри клиента
-		// благодаря кастомному TokenStorage
-		return nil
 	}
 
 	return nil
 }
 
 // GetAuthURL возвращает URL для авторизации в AmoCRM
-func (s *Service) GetAuthURL(state string) (*url.URL, error) {
-	return s.client.AuthorizeURL(state, amocrm.PostMessageMode)
+func (s *Service) GetAuthURL(state string) string {
+	authURL, _ := s.client.AuthorizeURL(state, amocrm.PostMessageMode)
+	return authURL.String()
 }
 
 // ExchangeCode обменивает код авторизации на токены
@@ -178,49 +192,143 @@ func (s *Service) ExchangeCode(ctx context.Context, code string) error {
 		return fmt.Errorf("failed to exchange code: %w", err)
 	}
 
-	// Токен автоматически сохранится через TokenStorage
+	// Сохраняем токен
+	if err := s.saveToken(token); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
+	}
+
 	s.logger.Info("Token received and saved",
 		zap.Time("expires_at", token.ExpiresAt()))
 
 	return nil
 }
 
+// GetToken возвращает текущий токен (для внутреннего использования)
+func (s *Service) GetToken() amocrm.Token {
+	return s.client.GetToken()
+}
+
+// SetTokens устанавливает токены (для загрузки сохраненных токенов)
+func (s *Service) SetTokens(tokens *TokenStored) error {
+	token := amocrm.NewToken(
+		tokens.AccessToken,
+		tokens.RefreshToken,
+		tokens.TokenType,
+		tokens.ExpiresAt,
+	)
+
+	if err := s.client.SetToken(token); err != nil {
+		return err
+	}
+
+	// Сохраняем в файл
+	return s.saveToken(token)
+}
+
+// LoadTokens загружает токены из файла (статический метод для внешнего использования)
+func LoadTokens(ctx context.Context) (*TokenStored, error) {
+	servicePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	tokenPath := filepath.Join(filepath.Dir(servicePath), "amocrm_token.json")
+
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var stored TokenStored
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, err
+	}
+
+	return &stored, nil
+}
+
 // GetLeads получает сделки из AmoCRM
 func (s *Service) GetLeads(ctx context.Context, params map[string]string) ([]*amocrm.Lead, error) {
-	options := &amocrm.GetLeadsOptions{}
+	values := url.Values{}
 
+	// Добавляем связанные сущности
+	values.Add("with", "contacts")
+
+	// Добавляем параметры из запроса
 	if limit, ok := params["limit"]; ok {
-		fmt.Sscanf(limit, "%d", &options.Limit)
+		values.Add("limit", limit)
+	} else {
+		values.Add("limit", "50")
 	}
 
 	if page, ok := params["page"]; ok {
-		fmt.Sscanf(page, "%d", &options.Page)
+		values.Add("page", page)
+	} else {
+		values.Add("page", "1")
 	}
 
 	if query, ok := params["query"]; ok {
-		options.Query = query
+		values.Add("query", query)
 	}
 
-	leads, err := s.client.GetLeads(options)
-	if err != nil {
+	// Фильтры
+	if statusID, ok := params["filter[status_id]"]; ok {
+		values.Add("filter[statuses][0][status_id]", statusID)
+	}
+
+	if pipelineID, ok := params["filter[pipeline_id]"]; ok {
+		values.Add("filter[statuses][0][pipeline_id]", pipelineID)
+	}
+
+	if responsibleUserID, ok := params["filter[responsible_user_id]"]; ok {
+		values.Add("filter[responsible_user_id]", responsibleUserID)
+	}
+
+	// Сортировка
+	values.Add("order[id]", "desc")
+
+	// Вызываем API
+	resLeads, err, statusCode := s.client.Leads().GetLeads(values)
+
+	if err != nil && statusCode != 204 {
+		s.logger.Error("Failed to get leads",
+			zap.Error(err),
+			zap.Int("status_code", statusCode))
 		return nil, fmt.Errorf("failed to get leads: %w", err)
 	}
 
-	return leads, nil
+	if statusCode == 204 || resLeads == nil {
+		// Нет контента
+		return []*amocrm.Lead{}, nil
+	}
+
+	if err == io.EOF {
+		return []*amocrm.Lead{}, nil
+	}
+
+	if resLeads != nil && resLeads.Embedded.Leads != nil {
+		return resLeads.Embedded.Leads, nil
+	}
+
+	return []*amocrm.Lead{}, nil
 }
 
 // GetLeadByID получает сделку по ID
 func (s *Service) GetLeadByID(ctx context.Context, leadID int) (*amocrm.Lead, error) {
-	leads, err := s.client.GetLeadsByID(leadID)
+	lead, err, statusCode := s.client.Leads().GetLead(strconv.Itoa(leadID))
+
 	if err != nil {
+		s.logger.Error("Failed to get lead",
+			zap.Error(err),
+			zap.Int("lead_id", leadID),
+			zap.Int("status_code", statusCode))
 		return nil, fmt.Errorf("failed to get lead: %w", err)
 	}
 
-	if len(leads) == 0 {
+	if statusCode == 404 {
 		return nil, fmt.Errorf("lead not found")
 	}
 
-	return leads[0], nil
+	return lead, nil
 }
 
 // UpdateLeads обновляет сделки
@@ -235,15 +343,22 @@ func (s *Service) UpdateLeads(ctx context.Context, leads []*amocrm.Lead) error {
 		}
 
 		batch := leads[i:end]
-		updatedLeads, err := s.client.UpdateLeads(batch)
+		updatedLeads, err, statusCode := s.client.Leads().Update(batch)
+
 		if err != nil {
+			s.logger.Error("Failed to update leads batch",
+				zap.Error(err),
+				zap.Int("from", i),
+				zap.Int("to", end),
+				zap.Int("status_code", statusCode))
 			return fmt.Errorf("failed to update leads batch %d-%d: %w", i, end, err)
 		}
 
 		s.logger.Info("Updated leads batch",
 			zap.Int("from", i),
 			zap.Int("to", end),
-			zap.Int("updated", len(updatedLeads)))
+			zap.Int("updated", len(updatedLeads)),
+			zap.Int("status_code", statusCode))
 	}
 
 	return nil
@@ -251,109 +366,132 @@ func (s *Service) UpdateLeads(ctx context.Context, leads []*amocrm.Lead) error {
 
 // GetContacts получает контакты
 func (s *Service) GetContacts(ctx context.Context, params map[string]string) ([]*amocrm.Contact, error) {
-	options := &amocrm.GetContactsOptions{}
+	values := url.Values{}
 
+	// Добавляем параметры
 	if query, ok := params["query"]; ok {
-		options.Query = query
+		values.Add("query", query)
 	}
 
 	if limit, ok := params["limit"]; ok {
-		fmt.Sscanf(limit, "%d", &options.Limit)
+		values.Add("limit", limit)
+	} else {
+		values.Add("limit", "50")
 	}
 
 	if page, ok := params["page"]; ok {
-		fmt.Sscanf(page, "%d", &options.Page)
+		values.Add("page", page)
+	} else {
+		values.Add("page", "1")
 	}
 
-	contacts, err := s.client.GetContacts(options)
-	if err != nil {
+	// Вызываем API
+	resContacts, err, statusCode := s.client.Contacts().GetContacts(values)
+
+	if err != nil && statusCode != 204 {
+		s.logger.Error("Failed to get contacts",
+			zap.Error(err),
+			zap.Int("status_code", statusCode))
 		return nil, fmt.Errorf("failed to get contacts: %w", err)
 	}
 
-	return contacts, nil
+	if statusCode == 204 || resContacts == nil {
+		// Нет контента
+		return []*amocrm.Contact{}, nil
+	}
+
+	if err == io.EOF {
+		return []*amocrm.Contact{}, nil
+	}
+
+	if resContacts != nil && resContacts.Embedded.Contacts != nil {
+		return resContacts.Embedded.Contacts, nil
+	}
+
+	return []*amocrm.Contact{}, nil
 }
 
 // GetContactByID получает контакт по ID
 func (s *Service) GetContactByID(ctx context.Context, contactID int) (*amocrm.Contact, error) {
-	contacts, err := s.client.GetContactsByID(contactID)
+	contact, err, statusCode := s.client.Contacts().GetContact(strconv.Itoa(contactID))
+
 	if err != nil {
+		s.logger.Error("Failed to get contact",
+			zap.Error(err),
+			zap.Int("contact_id", contactID),
+			zap.Int("status_code", statusCode))
 		return nil, fmt.Errorf("failed to get contact: %w", err)
 	}
 
-	if len(contacts) == 0 {
+	if statusCode == 404 {
 		return nil, fmt.Errorf("contact not found")
 	}
 
-	return contacts[0], nil
+	return contact, nil
 }
 
 // GetCustomFields получает кастомные поля
 func (s *Service) GetCustomFields(ctx context.Context, entityType string) ([]*models.AmoCRMField, error) {
-	account, err := s.client.GetAccount()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get account: %w", err)
-	}
+	// В библиотеке нет прямого метода для получения полей
+	// Обычно они приходят вместе с аккаунтом или сущностями
+	// Для демонстрации возвращаем пустой массив
+	// В реальном приложении нужно будет получать поля из сущностей или через отдельный endpoint
 
-	var fields []*models.AmoCRMField
+	s.logger.Warn("GetCustomFields not fully implemented",
+		zap.String("entity_type", entityType))
 
-	switch entityType {
-	case "leads":
-		if account.CustomFields != nil && account.CustomFields.Leads != nil {
-			for id, field := range account.CustomFields.Leads {
-				fields = append(fields, &models.AmoCRMField{
-					ID:         int64(id),
-					Name:       field.Name,
-					Type:       field.Type,
-					EntityType: "leads",
-				})
-			}
-		}
-
-	case "contacts":
-		if account.CustomFields != nil && account.CustomFields.Contacts != nil {
-			for id, field := range account.CustomFields.Contacts {
-				fields = append(fields, &models.AmoCRMField{
-					ID:         int64(id),
-					Name:       field.Name,
-					Type:       field.Type,
-					EntityType: "contacts",
-				})
-			}
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported entity type: %s", entityType)
-	}
-
-	return fields, nil
+	return []*models.AmoCRMField{}, nil
 }
 
 // AddNote добавляет примечание к сущности
 func (s *Service) AddNote(ctx context.Context, entityType string, entityID int, text string) error {
-	note := &amocrm.Note{
+	note := &amocrm.Notes{
 		EntityID: entityID,
-		Text:     text,
-		NoteType: 4, // Обычное примечание
+		NoteType: "common", // Обычное примечание
+		Params: &amocrm.NotesParams{
+			Text: text,
+		},
+		CreatedAt: int(time.Now().Unix()),
+		UpdatedAt: int(time.Now().Unix()),
 	}
 
 	switch entityType {
 	case "leads":
-		note.ElementType = 2 // Тип для сделок
+		// Для сделок
+		notes, err, statusCode := s.client.Leads().AddNotes([]*amocrm.Notes{note})
+		if err != nil {
+			s.logger.Error("Failed to add note to lead",
+				zap.Error(err),
+				zap.Int("entity_id", entityID),
+				zap.Int("status_code", statusCode))
+			return fmt.Errorf("failed to add note: %w", err)
+		}
+
+		if len(notes) > 0 {
+			s.logger.Info("Note added successfully to lead",
+				zap.Int("note_id", notes[0].ID),
+				zap.Int("entity_id", entityID))
+		}
+
 	case "contacts":
-		note.ElementType = 1 // Тип для контактов
+		// Для контактов
+		notes, err, statusCode := s.client.Contacts().AddNotes([]*amocrm.Notes{note})
+		if err != nil {
+			s.logger.Error("Failed to add note to contact",
+				zap.Error(err),
+				zap.Int("entity_id", entityID),
+				zap.Int("status_code", statusCode))
+			return fmt.Errorf("failed to add note: %w", err)
+		}
+
+		if len(notes) > 0 {
+			s.logger.Info("Note added successfully to contact",
+				zap.Int("note_id", notes[0].ID),
+				zap.Int("entity_id", entityID))
+		}
+
 	default:
 		return fmt.Errorf("unsupported entity type: %s", entityType)
-	}
-
-	notes, err := s.client.CreateNotes([]*amocrm.Note{note})
-	if err != nil {
-		return fmt.Errorf("failed to add note: %w", err)
-	}
-
-	if len(notes) > 0 {
-		s.logger.Info("Note added successfully",
-			zap.Int("note_id", notes[0].ID),
-			zap.Int("entity_id", entityID))
 	}
 
 	return nil

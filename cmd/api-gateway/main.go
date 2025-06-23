@@ -74,7 +74,7 @@ func main() {
 	// Setup routes (auth middleware will handle public endpoints internally)
 	handlers.SetupAuthRoutes(api, cfg.JWTSecret, repo, log)
 	handlers.SetupWebhookRoutes(api, log)
-	handlers.SetupCRMRoutes(api, log)
+	handlers.SetupCRMRoutes(api, cfg, repo, log)
 	handlers.SetupFlowRoutes(api, log)
 	handlers.SetupDialerRoutes(api, log)
 

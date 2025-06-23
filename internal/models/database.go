@@ -7,11 +7,12 @@ import (
 
 // AmoCRMField represents a field from AmoCRM
 type AmoCRMField struct {
-	ID        int64     `db:"id" json:"id"`
-	Name      string    `db:"name" json:"name"`
-	Type      string    `db:"type" json:"type"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	ID         int64     `db:"id" json:"id"`
+	Name       string    `db:"name" json:"name"`
+	Type       string    `db:"type" json:"type"`
+	EntityType string    `db:"entity_type" json:"entity_type"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // DialerScheduler represents a scheduler from dialer system

@@ -30,12 +30,27 @@ func main() {
 		log.Fatal("Failed to initialize AmoCRM service", zap.Error(err))
 	}
 
-	// Load saved tokens
+	// Проверяем наличие токенов
 	ctx := context.Background()
 	if tokens, err := amocrm.LoadTokens(ctx); err != nil {
-		log.Error("Failed to load tokens", zap.Error(err))
-	} else if tokens != nil {
-		amocrmService.SetTokens(tokens)
+		log.Warn("No saved tokens found", zap.Error(err))
+
+		// Если нет сохраненных токенов и нет кода авторизации, выводим инструкцию
+		if cfg.AmoCRMAuthCode == "" {
+			log.Info("No auth code provided. Please authorize the application:")
+			log.Info("1. Set AMOCRM_DOMAIN, AMOCRM_CLIENT_ID, AMOCRM_CLIENT_SECRET, AMOCRM_REDIRECT_URI in .env")
+			log.Info("2. Get auth URL from API Gateway: GET /api/v1/amocrm/auth")
+			log.Info("3. Complete authorization and get the code")
+			log.Info("4. Set AMOCRM_AUTH_CODE in .env and restart the service")
+		}
+	} else {
+		// Устанавливаем загруженные токены
+		if err := amocrmService.SetTokens(tokens); err != nil {
+			log.Error("Failed to set loaded tokens", zap.Error(err))
+		} else {
+			log.Info("Tokens loaded successfully",
+				zap.Time("expires_at", tokens.ExpiresAt))
+		}
 	}
 
 	// Setup graceful shutdown
@@ -44,6 +59,12 @@ func main() {
 
 	log.Info("CRM Service started")
 
+	// В реальном приложении здесь бы был gRPC сервер или другой способ
+	// предоставления функциональности другим сервисам
+	// Пока просто ждем сигнала завершения
+
 	<-quit
 	log.Info("Shutting down CRM Service...")
+
+	// Здесь можно добавить graceful shutdown логику
 }

@@ -3,7 +3,7 @@ module crm-dialer-integration
 go 1.23.5
 
 require (
-	github.com/2010kira2010/amocrm v0.0.0-20241203134357-4dce6e743d28 // indirect
+	github.com/2010kira2010/amocrm v0.0.0-20250623151655-2cb7a997ad20 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
