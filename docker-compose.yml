@@ -49,11 +49,7 @@ services:
       - "8222:8222"  # HTTP monitoring
     networks:
       - crm-dialer-network
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8222 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+
 
   # API Gateway
   api-gateway:
@@ -75,8 +71,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
     volumes:
@@ -94,8 +90,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -118,8 +114,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -138,8 +134,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -155,8 +151,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -174,8 +170,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      nats:
-        condition: service_healthy
+      #nats:
+      #  condition: service_healthy
     networks:
       - crm-dialer-network
 
