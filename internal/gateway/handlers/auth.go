@@ -80,14 +80,14 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	user, err := h.repo.GetUserByEmail(c.Context(), req.Email)
 	if err != nil || user == nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "Invalid credentials",
+			"error": "Invalid credentials. Not found user.",
 		})
 	}
 
 	// Check password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "Invalid credentials",
+			"error": "Invalid credentials. Bad password.",
 		})
 	}
 

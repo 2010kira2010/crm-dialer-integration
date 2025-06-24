@@ -99,11 +99,11 @@ CREATE TRIGGER update_integration_flows_updated_at BEFORE UPDATE ON integration_
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Insert demo user (password: demo123)
+-- Insert admin user (password: admin)
 INSERT INTO users (email, name, password_hash, role)
 VALUES (
-           'demo@example.com',
-           'Demo User',
-           '$2a$10$YourHashedPasswordHere', -- You need to generate this
+           'admin@example.com',
+           'admin',
+           '$2a$12$8y8HG8bKxOqGj50zi/LdeempqTKXnVi0Xfcz/vMzFexKEXXIDnVN2',
            'admin'
        );

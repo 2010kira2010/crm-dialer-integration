@@ -49,7 +49,11 @@ services:
       - "8222:8222"  # HTTP monitoring
     networks:
       - crm-dialer-network
-
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # API Gateway
   api-gateway:
@@ -71,12 +75,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
-    volumes:
-      - ./web/build:/app/web/build:ro
+    #volumes:
+    #  - ./web/build:/app/web/build:ro
 
   # Webhook Service
   webhook-service:
@@ -90,8 +94,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -114,8 +118,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -134,8 +138,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -151,8 +155,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
 
@@ -170,8 +174,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      #nats:
-      #  condition: service_healthy
+      nats:
+        condition: service_healthy
     networks:
       - crm-dialer-network
 

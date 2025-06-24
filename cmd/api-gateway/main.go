@@ -41,7 +41,7 @@ func main() {
 	// Global middleware
 	app.Use(recover.New())
 	app.Use(requestid.New())
-	app.Use(logger.New(cfg.LogLevel))
+	app.Use(middleware.FiberLogger(log))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.CORSOrigins,
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
