@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crm-dialer-integration/internal/models"
+	"crm-dialer-integration/internal/services/amocrm"
 	"encoding/json"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -42,26 +43,66 @@ func main() {
 	}
 	defer nc.Close()
 
+	// Initialize AmoCRM service
+	amocrmService, err := amocrm.NewService(cfg, log)
+	if err != nil {
+		log.Error("Failed to initialize AmoCRM service", zap.Error(err))
+	}
+
+	// Initialize webhook processor with NATS support
+	var processor *amocrm.WebhookProcessor
+	if amocrmService != nil {
+		processor = amocrm.NewWebhookProcessorWithNATS(amocrmService, log, nc)
+	}
+
 	// Subscribe to webhook events
 	_, err = nc.Subscribe("webhooks.amocrm.*", func(msg *nats.Msg) {
 		log.Info("Received webhook event",
 			zap.String("subject", msg.Subject),
 			zap.Int("size", len(msg.Data)))
 
+		// Parse webhook data
+		var webhookData struct {
+			Type      string                 `json:"type"`
+			Payload   map[string]interface{} `json:"payload"`
+			Timestamp int64                  `json:"timestamp"`
+		}
+
+		if err := json.Unmarshal(msg.Data, &webhookData); err != nil {
+			log.Error("Failed to unmarshal webhook data", zap.Error(err))
+			return
+		}
+
 		// Save to database
 		webhookLog := &models.WebhookLog{
 			ID:          uuid.New().String(),
-			WebhookType: msg.Subject,
+			WebhookType: webhookData.Type,
 			RawData:     json.RawMessage(msg.Data),
 			ProcessedAt: time.Now(),
-			Status:      "received",
+			Status:      "processing",
 		}
 
-		if err := repo.SaveWebhookLog(context.Background(), webhookLog); err != nil {
+		ctx := context.Background()
+		if err := repo.SaveWebhookLog(ctx, webhookLog); err != nil {
 			log.Error("Failed to save webhook log", zap.Error(err))
 		}
 
-		// TODO: Process webhook based on type
+		// Process webhook with AmoCRM processor if available
+		if processor != nil {
+			if err := processor.ProcessLeadWebhook(ctx, webhookData.Type, webhookData.Payload); err != nil {
+				log.Error("Failed to process webhook",
+					zap.String("type", webhookData.Type),
+					zap.Error(err))
+				webhookLog.Status = "failed"
+			} else {
+				webhookLog.Status = "processed"
+			}
+
+			// Update webhook status
+			if err := repo.SaveWebhookLog(ctx, webhookLog); err != nil {
+				log.Error("Failed to update webhook status", zap.Error(err))
+			}
+		}
 	})
 
 	if err != nil {

@@ -43,5 +43,9 @@ func (s *WebhookService) ProcessWebhook(ctx context.Context, eventType string, p
 		return err
 	}
 
+	s.logger.Info("Webhook published to NATS",
+		zap.String("subject", subject),
+		zap.String("event_type", eventType))
+
 	return nil
 }

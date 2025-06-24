@@ -50,7 +50,7 @@ services:
     networks:
       - crm-dialer-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      test: ["CMD-SHELL", "nc -z localhost 8222 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -268,28 +268,3 @@ volumes:
   grafana_data:
   loki_data:
 
-# .env.example
-# PostgreSQL
-  POSTGRES_USER=postgres
-  POSTGRES_PASSWORD=your-secure-password
-  POSTGRES_DB=crm_dialer
-  
-  # JWT
-  JWT_SECRET=your-jwt-secret-key
-  
-  # CORS
-  CORS_ORIGINS=http://localhost:3000
-  
-  # AmoCRM
-  AMOCRM_DOMAIN=your-domain.amocrm.ru
-  AMOCRM_CLIENT_ID=your-client-id
-  AMOCRM_CLIENT_SECRET=your-client-secret
-  AMOCRM_REDIRECT_URI=http://localhost:8080/auth/callback
-  
-  # Dialer System
-  DIALER_API_URL=https://your-dialer-api.com
-  DIALER_API_KEY=your-dialer-api-key
-  
-  # Grafana
-  GRAFANA_USER=admin
-  GRAFANA_PASSWORD=your-grafana-password

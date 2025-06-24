@@ -74,12 +74,12 @@ CREATE INDEX idx_users_email ON users(email);
 
 -- Create update trigger for updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
 RETURN NEW;
 END;
-$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_amocrm_fields_updated_at BEFORE UPDATE ON amocrm_fields
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

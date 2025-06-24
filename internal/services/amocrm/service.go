@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/2010kira2010/amocrm"
@@ -21,11 +20,10 @@ import (
 )
 
 type Service struct {
-	client     amocrm.Client
-	logger     *zap.Logger
-	config     *config.Config
-	tokenMutex sync.RWMutex
-	tokenPath  string
+	client       amocrm.Client
+	logger       *zap.Logger
+	config       *config.Config
+	tokenManager *TokenManager
 }
 
 // TokenStored структура для хранения токенов
@@ -42,10 +40,11 @@ func NewService(cfg *config.Config, logger *zap.Logger) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	tokenPath := filepath.Join(filepath.Dir(servicePath), "amocrm_token.json")
 	service := &Service{
-		logger:    logger,
-		config:    cfg,
-		tokenPath: filepath.Join(filepath.Dir(servicePath), "amocrm_token.json"),
+		logger:       logger,
+		config:       cfg,
+		tokenManager: NewTokenManager(tokenPath, logger),
 	}
 
 	// Создаем клиент AmoCRM
@@ -77,7 +76,7 @@ func NewService(cfg *config.Config, logger *zap.Logger) (*Service, error) {
 // initializeToken загружает существующий токен или получает новый через код авторизации
 func (s *Service) initializeToken() error {
 	// Пытаемся загрузить существующий токен
-	if token, err := s.loadToken(); err == nil && token != nil {
+	if token, err := s.tokenManager.LoadToken(); err == nil && token != nil {
 		if err := s.client.SetToken(token); err != nil {
 			return fmt.Errorf("failed to set loaded token: %w", err)
 		}
@@ -94,7 +93,7 @@ func (s *Service) initializeToken() error {
 		}
 
 		// Сохраняем токен
-		if err := s.saveToken(token); err != nil {
+		if err := s.tokenManager.SaveToken(token); err != nil {
 			s.logger.Error("Failed to save token", zap.Error(err))
 		}
 
@@ -108,51 +107,12 @@ func (s *Service) initializeToken() error {
 
 // loadToken загружает токен из файла
 func (s *Service) loadToken() (amocrm.Token, error) {
-	s.tokenMutex.RLock()
-	defer s.tokenMutex.RUnlock()
-
-	data, err := os.ReadFile(s.tokenPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var stored TokenStored
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, err
-	}
-
-	return amocrm.NewToken(
-		stored.AccessToken,
-		stored.RefreshToken,
-		stored.TokenType,
-		stored.ExpiresAt,
-	), nil
+	return s.tokenManager.LoadToken()
 }
 
 // saveToken сохраняет токен в файл
 func (s *Service) saveToken(token amocrm.Token) error {
-	s.tokenMutex.Lock()
-	defer s.tokenMutex.Unlock()
-
-	stored := TokenStored{
-		AccessToken:  token.AccessToken(),
-		RefreshToken: token.RefreshToken(),
-		TokenType:    token.TokenType(),
-		ExpiresAt:    token.ExpiresAt(),
-	}
-
-	data, err := json.MarshalIndent(stored, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// Создаем директорию если не существует
-	dir := filepath.Dir(s.tokenPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(s.tokenPath, data, 0600)
+	return s.tokenManager.SaveToken(token)
 }
 
 // startTokenRefreshTask запускает задачу обновления токена
@@ -174,6 +134,25 @@ func (s *Service) CheckAndRefreshToken() error {
 	// Проверяем токен
 	if err := s.client.CheckToken(); err != nil {
 		s.logger.Info("Token needs refresh", zap.Error(err))
+
+		// После вызова CheckToken токен должен обновиться внутри клиента
+		// Загружаем обновленный токен из файла (если библиотека его сохранила)
+		// или пытаемся получить его другим способом
+
+		// Поскольку библиотека автоматически обновляет токен,
+		// мы можем попробовать сделать тестовый запрос
+		values := url.Values{}
+		values.Add("limit", "1")
+		_, _, statusCode := s.client.Leads().GetLeads(values)
+
+		if statusCode == 200 || statusCode == 204 {
+			// Токен успешно обновлен, сохраняем его
+			// К сожалению, без метода GetToken мы не можем получить обновленный токен
+			// Это ограничение библиотеки
+			s.logger.Info("Token refreshed successfully")
+		} else {
+			return fmt.Errorf("failed to refresh token, status code: %d", statusCode)
+		}
 	}
 
 	return nil
