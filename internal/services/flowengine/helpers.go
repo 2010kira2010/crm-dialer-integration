@@ -19,6 +19,14 @@ func (fe *FlowEngine) executeAction(ctx context.Context, actionData, inputData m
 		return fe.updateLead(ctx, actionData, inputData)
 	case "add_note":
 		return fe.addNote(ctx, actionData, inputData)
+	case "add_to_bucket":
+		return fe.addToBucket(ctx, actionData, inputData)
+	case "change_priority":
+		return fe.changePriority(ctx, actionData, inputData)
+	case "change_scheduler_step":
+		return fe.changeSchedulerStep(ctx, actionData, inputData)
+	case "remove_from_dialer":
+		return fe.removeFromDialer(ctx, inputData)
 	default:
 		return fmt.Errorf("unknown action type: %s", actionType)
 	}
@@ -81,13 +89,213 @@ func (fe *FlowEngine) sendToDialer(ctx context.Context, actionData, inputData ma
 
 func (fe *FlowEngine) updateLead(ctx context.Context, actionData, inputData map[string]interface{}) error {
 	leadID, _ := inputData["lead_id"].(float64)
-	updateFields, _ := actionData["fields"].(map[string]interface{})
 
 	fe.logger.Info("Updating lead",
 		zap.Float64("lead_id", leadID),
-		zap.Any("fields", updateFields))
+		zap.Any("action_data", actionData))
 
-	// TODO: Implement actual CRM API call
+	// Подготавливаем данные для обновления
+	updateData := map[string]interface{}{
+		"lead_id": int(leadID),
+	}
+
+	// Обновление полей
+	if fields, ok := actionData["fields"].(map[string]interface{}); ok {
+		updateData["fields"] = fields
+	}
+
+	// Обновление статуса
+	if statusID, ok := actionData["status_id"].(float64); ok && statusID > 0 {
+		updateData["status_id"] = int(statusID)
+	}
+
+	// Обновление воронки
+	if pipelineID, ok := actionData["pipeline_id"].(float64); ok && pipelineID > 0 {
+		updateData["pipeline_id"] = int(pipelineID)
+	}
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"action": "update_lead",
+			"data":   updateData,
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("crm.update_lead", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Lead update request sent")
+	}
+
+	return nil
+}
+
+func (fe *FlowEngine) addToBucket(ctx context.Context, actionData, inputData map[string]interface{}) error {
+	bucketID, _ := actionData["bucket_id"].(string)
+	priority, _ := actionData["priority"].(float64)
+	schedulerID, _ := actionData["scheduler_id"].(string)
+	schedulerStep, _ := actionData["scheduler_step"].(float64)
+
+	fe.logger.Info("Adding to bucket",
+		zap.String("bucket_id", bucketID),
+		zap.Float64("priority", priority),
+		zap.String("scheduler_id", schedulerID),
+		zap.Float64("scheduler_step", schedulerStep))
+
+	// Подготавливаем контакт
+	contact := map[string]interface{}{
+		"phone":   "",
+		"name":    "",
+		"email":   "",
+		"lead_id": inputData["lead_id"],
+		"custom_data": map[string]interface{}{
+			"amocrm_lead_id":    inputData["lead_id"],
+			"amocrm_contact_id": inputData["contact_id"],
+			"priority":          int(priority),
+			"scheduler_step":    int(schedulerStep),
+		},
+	}
+
+	// Извлекаем данные контакта
+	if contactData, ok := inputData["contact"].(map[string]interface{}); ok {
+		if phone, ok := contactData["phone"].(string); ok {
+			contact["phone"] = phone
+		}
+		if name, ok := contactData["name"].(string); ok {
+			contact["name"] = name
+		}
+		if email, ok := contactData["email"].(string); ok {
+			contact["email"] = email
+		}
+	}
+
+	// Добавляем custom fields из inputData
+	if customFields, ok := inputData["custom_fields"].(map[string]interface{}); ok {
+		customData := contact["custom_data"].(map[string]interface{})
+		for k, v := range customFields {
+			customData[k] = v
+		}
+	}
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"action":         "add_to_bucket",
+			"bucket_id":      bucketID,
+			"priority":       int(priority),
+			"scheduler_id":   schedulerID,
+			"scheduler_step": int(schedulerStep),
+			"contact":        contact,
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("dialer.add_to_bucket", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Contact sent to bucket")
+	}
+
+	return nil
+}
+
+func (fe *FlowEngine) changePriority(ctx context.Context, actionData, inputData map[string]interface{}) error {
+	priority, _ := actionData["priority"].(float64)
+	leadID, _ := inputData["lead_id"].(float64)
+
+	fe.logger.Info("Changing priority",
+		zap.Float64("lead_id", leadID),
+		zap.Float64("new_priority", priority))
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"action":   "change_priority",
+			"lead_id":  leadID,
+			"priority": int(priority),
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("dialer.change_priority", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Lead change priority sent")
+	}
+
+	return nil
+}
+
+func (fe *FlowEngine) changeSchedulerStep(ctx context.Context, actionData, inputData map[string]interface{}) error {
+	schedulerStep, _ := actionData["scheduler_step"].(float64)
+	leadID, _ := inputData["lead_id"].(float64)
+
+	fe.logger.Info("Changing scheduler step",
+		zap.Float64("lead_id", leadID),
+		zap.Float64("new_scheduler_step", schedulerStep))
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"action":         "change_scheduler_step",
+			"lead_id":        leadID,
+			"scheduler_step": int(schedulerStep),
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("dialer.change_scheduler_step", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Lead change scheduler step sent")
+	}
+
+	return nil
+}
+
+func (fe *FlowEngine) removeFromDialer(ctx context.Context, inputData map[string]interface{}) error {
+	leadID, _ := inputData["lead_id"].(float64)
+
+	fe.logger.Info("Remove from dialer",
+		zap.Float64("lead_id", leadID))
+
+	// Отправляем через NATS если подключен
+	if fe.nc != nil {
+		message := map[string]interface{}{
+			"action":  "remove_from_dialer",
+			"lead_id": leadID,
+		}
+
+		data, err := json.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if err := fe.nc.Publish("dialer.remove_from_dialer", data); err != nil {
+			return fmt.Errorf("failed to publish to NATS: %w", err)
+		}
+
+		fe.logger.Info("Lead remove from dialer sent")
+	}
+
 	return nil
 }
 

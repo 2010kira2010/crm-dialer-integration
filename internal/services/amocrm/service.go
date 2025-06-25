@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -480,4 +481,70 @@ func (s *Service) AddNote(ctx context.Context, entityType string, entityID int, 
 	}
 
 	return nil
+}
+
+// GetPipelines получает список воронок со статусами
+func (s *Service) GetPipelines(ctx context.Context) ([]map[string]interface{}, error) {
+	// Начинаем формировать структуру для запроса массива воронок и этапов
+	values := url.Values{}
+	values.Add("limit", "250")
+
+	resPipelines, err, statusCode := s.client.Pipelines().GetPipelines(values)
+	if err != nil {
+		s.logger.Error("Failed to get pipelines",
+			zap.Error(err),
+			zap.Int("status_code", statusCode))
+		return nil, fmt.Errorf("failed to get pipelines: %w", err)
+	}
+
+	var pipelines []map[string]interface{}
+
+	// Если есть embedded pipelines
+	if resPipelines != nil && resPipelines.Embedded.Pipelines != nil {
+		for _, pipeline := range resPipelines.Embedded.Pipelines {
+			pipelineData := map[string]interface{}{
+				"id":      pipeline.ID,
+				"name":    pipeline.Name,
+				"sort":    pipeline.Sort,
+				"is_main": pipeline.IsMain,
+			}
+
+			// Добавляем статусы
+			var statuses []map[string]interface{}
+			if pipeline.Embedded != nil && pipeline.Embedded.Statuses != nil {
+				for _, status := range pipeline.Embedded.Statuses {
+					statuses = append(statuses, map[string]interface{}{
+						"id":          status.ID,
+						"name":        status.Name,
+						"pipeline_id": status.PipelineID,
+						"sort":        status.Sort,
+						"color":       status.Color,
+						"type":        status.Type,
+					})
+				}
+				// Сортируем статусы по sort
+				sort.Slice(statuses, func(i, j int) bool {
+					sortI, _ := statuses[i]["sort"].(int)
+					sortJ, _ := statuses[j]["sort"].(int)
+					return sortI < sortJ
+				})
+
+				pipelineData["statuses"] = statuses
+				pipelines = append(pipelines, pipelineData)
+			}
+		}
+		// Сортируем воронки по sort
+		sort.Slice(pipelines, func(i, j int) bool {
+			sortI, _ := pipelines[i]["sort"].(int)
+			sortJ, _ := pipelines[j]["sort"].(int)
+			return sortI < sortJ
+		})
+
+		s.logger.Info("Pipelines retrieved successfully",
+			zap.Int("count", len(pipelines)))
+
+		return pipelines, nil
+
+	}
+	return nil, fmt.Errorf("failed to get pipelines")
 }

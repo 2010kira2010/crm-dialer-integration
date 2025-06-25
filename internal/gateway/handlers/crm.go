@@ -53,6 +53,9 @@ func SetupCRMRoutes(router fiber.Router, cfg *config.Config, repo *repository.Re
 
 	// Status endpoint
 	crm.Get("/status", handler.GetStatus)
+
+	// Pipelines endpoints
+	crm.Get("/pipelines", handler.GetPipelines)
 }
 
 func (h *CRMHandler) GetAuthURL(c *fiber.Ctx) error {
@@ -114,6 +117,44 @@ func (h *CRMHandler) GetStatus(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(status)
+}
+
+func (h *CRMHandler) GetPipelines(c *fiber.Ctx) error {
+	if h.amocrmService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "AmoCRM service is not available",
+		})
+	}
+
+	/*
+		// Сначала пробуем получить из базы данных
+		pipelines, err := h.repo.GetAmoCRMPipelines(c.Context())
+		if err != nil {
+			h.logger.Error("Failed to get pipelines from database", zap.Error(err))
+		}
+
+		if len(pipelines) == 0 {
+			// Если в базе нет, получаем из AmoCRM
+			pipelines, err = h.amocrmService.GetPipelines(c.Context())
+			if err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error":   "Failed to get fields",
+					"details": err,
+				})
+			}
+
+			// Сохраняем в базу данных
+			for _, pipeline := range pipelines {
+				if err := h.repo.SaveAmoCRMPipeline(c.Context(), pipeline); err != nil {
+					h.logger.Error("Failed to save pipeline", zap.Error(err))
+				}
+			}
+		}
+
+		return c.JSON(pipelines)
+
+	*/
+	return nil
 }
 
 func (h *CRMHandler) GetFields(c *fiber.Ctx) error {

@@ -75,7 +75,7 @@ func main() {
 	handlers.SetupAuthRoutes(api, cfg.JWTSecret, repo, log)
 	handlers.SetupWebhookRoutes(api, log)
 	handlers.SetupCRMRoutes(api, cfg, repo, log)
-	handlers.SetupFlowRoutes(api, log)
+	handlers.SetupFlowRoutes(api, repo, log)
 	handlers.SetupDialerRoutes(api, log)
 
 	// Fallback to index.html for SPA (should be last)

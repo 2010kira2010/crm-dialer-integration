@@ -44,34 +44,14 @@ export const FlowsPage: React.FC = observer(() => {
 
     const handleCreateFlow = async () => {
         if (newFlowName.trim()) {
-            // Create new flow
-            const flow = {
-                name: newFlowName,
-                flow_data: {
-                    nodes: [
-                        {
-                            id: 'start_1',
-                            type: 'start',
-                            data: { label: 'Start' },
-                            position: { x: 250, y: 50 },
-                        },
-                        {
-                            id: 'end_1',
-                            type: 'end',
-                            data: { label: 'End' },
-                            position: { x: 250, y: 300 },
-                        },
-                    ],
-                    edges: [],
-                },
-                is_active: false,
-            };
-
-            // TODO: Call API to create flow
-            setCreateDialogOpen(false);
-            setNewFlowName('');
-            // Navigate to editor
-            navigate('/flows/new');
+            try {
+                const flowId = await flowStore.createFlow(newFlowName);
+                setCreateDialogOpen(false);
+                setNewFlowName('');
+                navigate(`/flows/${flowId}`);
+            } catch (error) {
+                console.error('Failed to create flow:', error);
+            }
         }
     };
 
@@ -86,22 +66,36 @@ export const FlowsPage: React.FC = observer(() => {
     };
 
     const handleToggleFlow = async (flowId: string, isActive: boolean) => {
-        // TODO: Toggle flow status
-        console.log('Toggle flow:', flowId, isActive);
+        try {
+            await flowStore.toggleFlow(flowId, isActive);
+        } catch (error) {
+            console.error('Failed to toggle flow:', error);
+        }
     };
 
     const handleDeleteFlow = async (flowId: string) => {
         if (window.confirm('Вы уверены, что хотите удалить этот поток?')) {
-            // TODO: Delete flow
-            console.log('Delete flow:', flowId);
-            handleMenuClose();
+            try {
+                await flowStore.deleteFlow(flowId);
+                handleMenuClose();
+            } catch (error) {
+                console.error('Failed to delete flow:', error);
+            }
         }
     };
 
     const handleDuplicateFlow = async (flowId: string) => {
-        // TODO: Duplicate flow
-        console.log('Duplicate flow:', flowId);
-        handleMenuClose();
+        const flow = flowStore.flows.find(f => f.id === flowId);
+        if (flow) {
+            try {
+                const newFlowId = await flowStore.createFlow(`${flow.name} (копия)`);
+                // TODO: Copy flow data
+                handleMenuClose();
+                navigate(`/flows/${newFlowId}`);
+            } catch (error) {
+                console.error('Failed to duplicate flow:', error);
+            }
+        }
     };
 
     return (

@@ -1,11 +1,12 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { AmoCRMField, DialerScheduler, DialerCampaign, DialerBucket } from '../types';
+import { AmoCRMField, AmoCRMPipeline, DialerScheduler, DialerCampaign, DialerBucket } from '../types';
 import { RootStore } from './RootStore';
 import api from '../services/api';
 
 export class DataStore {
     rootStore: RootStore;
     amocrmFields: AmoCRMField[] = [];
+    amocrmPipelines: AmoCRMPipeline[] = [];
     dialerSchedulers: DialerScheduler[] = [];
     dialerCampaigns: DialerCampaign[] = [];
     dialerBuckets: DialerBucket[] = [];
@@ -21,8 +22,9 @@ export class DataStore {
         this.isLoading = true;
         this.error = null;
         try {
-            const [fields, schedulers, campaigns, buckets] = await Promise.all([
+            const [fields, pipelines, schedulers, campaigns, buckets] = await Promise.all([
                 api.get('/api/v1/amocrm/fields'),
+                api.get('/api/v1/amocrm/pipelines'),
                 api.get('/api/v1/dialer/schedulers'),
                 api.get('/api/v1/dialer/campaigns'),
                 api.get('/api/v1/dialer/buckets'),
@@ -30,6 +32,7 @@ export class DataStore {
 
             runInAction(() => {
                 this.amocrmFields = fields.data;
+                this.amocrmPipelines = pipelines.data;
                 this.dialerSchedulers = schedulers.data;
                 this.dialerCampaigns = campaigns.data;
                 this.dialerBuckets = buckets.data;
@@ -45,6 +48,7 @@ export class DataStore {
 
     clear() {
         this.amocrmFields = [];
+        this.amocrmPipelines = [];
         this.dialerSchedulers = [];
         this.dialerCampaigns = [];
         this.dialerBuckets = [];

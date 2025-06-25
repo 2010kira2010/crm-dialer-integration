@@ -134,11 +134,39 @@ func (fe *FlowEngine) executeNode(ctx context.Context, node *FlowNode, config *F
 }
 
 func (fe *FlowEngine) evaluateCondition(nodeData, inputData map[string]interface{}) bool {
-	field, _ := nodeData["field"].(string)
-	operator, _ := nodeData["operator"].(string)
-	value := nodeData["value"]
+	conditionData, ok := nodeData["conditionData"].(map[string]interface{})
+	if !ok {
+		return false
+	}
 
-	inputValue, exists := inputData[field]
+	field, _ := conditionData["field"].(string)
+	fieldType, _ := conditionData["fieldType"].(string)
+	operator, _ := conditionData["operator"].(string)
+	value := conditionData["value"]
+
+	var inputValue interface{}
+	var exists bool
+
+	// Обрабатываем разные типы полей
+	switch fieldType {
+	case "amocrm_field":
+		inputValue, exists = inputData[field]
+	case "pipeline":
+		inputValue, exists = inputData["pipeline_id"]
+	case "status":
+		inputValue, exists = inputData["status_id"]
+	case "bucket":
+		inputValue, exists = inputData["bucket_id"]
+	case "scheduler":
+		inputValue, exists = inputData["scheduler_id"]
+	case "scheduler_step":
+		inputValue, exists = inputData["scheduler_step"]
+	case "dial_attempts":
+		inputValue, exists = inputData["dial_attempts"]
+	default:
+		inputValue, exists = inputData[field]
+	}
+
 	if !exists {
 		return false
 	}

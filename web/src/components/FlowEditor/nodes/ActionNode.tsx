@@ -10,19 +10,31 @@ import {
     InputLabel,
     TextField,
     Chip,
+    Divider,
 } from '@mui/material';
 import CallIcon from '@mui/icons-material/Call';
 import UpdateIcon from '@mui/icons-material/Update';
-import NoteAddIcon from '@mui/icons-material/NoteAdd';
-import NotificationsIcon from '@mui/icons-material/Notifications';
+import PriorityHighIcon from '@mui/icons-material/PriorityHigh';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
 import { useStores } from '../../../hooks/useStores';
 import { observer } from 'mobx-react-lite';
+import { ActionType } from '../../../types';
 
-const actionIcons: Record<string, React.ReactNode> = {
-    send_to_dialer: <CallIcon />,
+const actionIcons: Record<ActionType, React.ReactNode> = {
     update_lead: <UpdateIcon />,
-    add_note: <NoteAddIcon />,
-    send_notification: <NotificationsIcon />,
+    add_to_bucket: <CallIcon />,
+    change_priority: <PriorityHighIcon />,
+    change_scheduler_step: <ScheduleIcon />,
+    remove_from_dialer: <RemoveCircleIcon />,
+};
+
+const actionLabels: Record<ActionType, string> = {
+    update_lead: 'Обновить лид',
+    add_to_bucket: 'Добавить в бакет',
+    change_priority: 'Изменить приоритет',
+    change_scheduler_step: 'Изменить шаг шедуллера',
+    remove_from_dialer: 'Изъять из прозвона',
 };
 
 interface ActionNodeProps {
@@ -31,65 +43,178 @@ interface ActionNodeProps {
     selected?: boolean;
 }
 
-interface ActionData {
-    scheduler_id?: string;
-    campaign_id?: string;
-    bucket_id?: string;
-    fields?: Record<string, any>;
-    text?: string;
-    notification_type?: string;
-    recipient?: string;
-    subject?: string;
-    message?: string;
-}
-
 const ActionNodeComponent: React.FC<ActionNodeProps> = ({ data, id, selected }) => {
     const { dataStore, flowStore } = useStores();
-    const [actionType, setActionType] = useState<string>(data.type || 'send_to_dialer');
-    const [actionData, setActionData] = useState<ActionData>(data.actionData || {});
+    const [actionType, setActionType] = useState<ActionType>(data.actionType || 'update_lead');
+    const [actionData, setActionData] = useState<any>(data.actionData || {});
 
     useEffect(() => {
-        // Load data if not already loaded
-        if (dataStore.dialerSchedulers.length === 0) {
+        if (dataStore.amocrmFields.length === 0) {
             dataStore.loadAllData();
         }
     }, [dataStore]);
 
     useEffect(() => {
-        // Update node data when actionType or actionData changes
-        const node = flowStore.nodes.find(n => n.id === id);
-        if (node) {
-            node.data = {
-                ...node.data,
-                type: actionType,
-                actionData: actionData,
-            };
-        }
-    }, [actionType, actionData, id, flowStore.nodes]);
+        flowStore.updateNodeData(id, { actionType, actionData });
+    }, [actionType, actionData, id, flowStore]);
 
-    const handleActionTypeChange = (type: string) => {
+    const handleActionTypeChange = (type: ActionType) => {
         setActionType(type);
-        setActionData({});
+        // Reset action data when changing type
+        switch (type) {
+            case 'update_lead':
+                setActionData({ fields: {}, status_id: '', pipeline_id: '' });
+                break;
+            case 'add_to_bucket':
+                setActionData({ bucket_id: '', priority: 50, scheduler_id: '', scheduler_step: 1 });
+                break;
+            case 'change_priority':
+                setActionData({ priority: 50 });
+                break;
+            case 'change_scheduler_step':
+                setActionData({ scheduler_step: 1 });
+                break;
+            case 'remove_from_dialer':
+                setActionData({});
+                break;
+        }
     };
 
     const updateActionData = (key: string, value: any) => {
-        setActionData((prev: ActionData) => ({ ...prev, [key]: value }));
+        setActionData((prev: any) => ({ ...prev, [key]: value }));
+    };
+
+    const updateFieldValue = (fieldId: string, value: any) => {
+        setActionData((prev: any) => ({
+            ...prev,
+            fields: {
+                ...prev.fields,
+                [fieldId]: value,
+            },
+        }));
     };
 
     const renderActionConfig = () => {
         switch (actionType) {
-            case 'send_to_dialer':
+            case 'update_lead':
+                return (
+                    <>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                            Выберите поля для обновления:
+                        </Typography>
+
+                        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+                            <InputLabel>Воронка</InputLabel>
+                            <Select
+                                value={actionData.pipeline_id || ''}
+                                onChange={(e) => {
+                                    updateActionData('pipeline_id', e.target.value);
+                                    // Reset status when pipeline changes
+                                    updateActionData('status_id', '');
+                                }}
+                                label="Воронка"
+                            >
+                                <MenuItem value="">
+                                    <em>Не изменять</em>
+                                </MenuItem>
+                                {dataStore.amocrmPipelines.map((pipeline) => (
+                                    <MenuItem key={pipeline.id} value={pipeline.id}>
+                                        {pipeline.name}
+                                    </MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+
+                        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+                            <InputLabel>Статус/Этап</InputLabel>
+                            <Select
+                                value={actionData.status_id || ''}
+                                onChange={(e) => updateActionData('status_id', e.target.value)}
+                                label="Статус/Этап"
+                                disabled={!actionData.pipeline_id}
+                            >
+                                <MenuItem value="">
+                                    <em>Не изменять</em>
+                                </MenuItem>
+                                {actionData.pipeline_id && dataStore.amocrmPipelines
+                                    .find(p => p.id === actionData.pipeline_id)
+                                    ?.statuses.map((status) => (
+                                        <MenuItem key={status.id} value={status.id}>
+                                            {status.name}
+                                        </MenuItem>
+                                    ))}
+                            </Select>
+                        </FormControl>
+
+                        <Divider sx={{ my: 1 }} />
+
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                            Кастомные поля:
+                        </Typography>
+                        {dataStore.amocrmFields.slice(0, 5).map((field) => (
+                            <TextField
+                                key={field.id}
+                                fullWidth
+                                size="small"
+                                label={field.name}
+                                value={actionData.fields?.[field.id] || ''}
+                                onChange={(e) => updateFieldValue(field.id.toString(), e.target.value)}
+                                sx={{ mb: 1 }}
+                                helperText={`Тип: ${field.type}`}
+                            />
+                        ))}
+                        {dataStore.amocrmFields.length > 5 && (
+                            <Typography variant="caption" color="text.secondary">
+                                + еще {dataStore.amocrmFields.length - 5} полей...
+                            </Typography>
+                        )}
+                    </>
+                );
+
+            case 'add_to_bucket':
                 return (
                     <>
                         <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-                            <InputLabel>Расписание</InputLabel>
+                            <InputLabel>Бакет</InputLabel>
+                            <Select
+                                value={actionData.bucket_id || ''}
+                                onChange={(e) => updateActionData('bucket_id', e.target.value)}
+                                label="Бакет"
+                                required
+                            >
+                                <MenuItem value="">
+                                    <em>Выберите бакет</em>
+                                </MenuItem>
+                                {dataStore.dialerBuckets.map((bucket) => (
+                                    <MenuItem key={bucket.id} value={bucket.id}>
+                                        {bucket.name}
+                                    </MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label="Приоритет в бакете"
+                            type="number"
+                            value={actionData.priority || 50}
+                            onChange={(e) => updateActionData('priority', parseInt(e.target.value) || 0)}
+                            sx={{ mb: 1 }}
+                            inputProps={{ min: 0, max: 100 }}
+                            helperText="0-100, чем выше число, тем выше приоритет"
+                        />
+
+                        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+                            <InputLabel>Шедуллер</InputLabel>
                             <Select
                                 value={actionData.scheduler_id || ''}
                                 onChange={(e) => updateActionData('scheduler_id', e.target.value)}
-                                label="Расписание"
+                                label="Шедуллер"
+                                required
                             >
                                 <MenuItem value="">
-                                    <em>Не выбрано</em>
+                                    <em>Выберите шедуллер</em>
                                 </MenuItem>
                                 {dataStore.dialerSchedulers.map((scheduler) => (
                                     <MenuItem key={scheduler.id} value={scheduler.id}>
@@ -99,133 +224,67 @@ const ActionNodeComponent: React.FC<ActionNodeProps> = ({ data, id, selected }) 
                             </Select>
                         </FormControl>
 
-                        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-                            <InputLabel>Кампания</InputLabel>
-                            <Select
-                                value={actionData.campaign_id || ''}
-                                onChange={(e) => updateActionData('campaign_id', e.target.value)}
-                                label="Кампания"
-                            >
-                                <MenuItem value="">
-                                    <em>Не выбрано</em>
-                                </MenuItem>
-                                {dataStore.dialerCampaigns.map((campaign) => (
-                                    <MenuItem key={campaign.id} value={campaign.id}>
-                                        {campaign.name}
-                                    </MenuItem>
-                                ))}
-                            </Select>
-                        </FormControl>
-
-                        <FormControl fullWidth size="small">
-                            <InputLabel>Корзина</InputLabel>
-                            <Select
-                                value={actionData.bucket_id || ''}
-                                onChange={(e) => updateActionData('bucket_id', e.target.value)}
-                                label="Корзина"
-                                disabled={!actionData.campaign_id}
-                            >
-                                <MenuItem value="">
-                                    <em>Не выбрано</em>
-                                </MenuItem>
-                                {dataStore.dialerBuckets
-                                    .filter(b => !actionData.campaign_id || b.campaign_id === actionData.campaign_id)
-                                    .map((bucket) => (
-                                        <MenuItem key={bucket.id} value={bucket.id}>
-                                            {bucket.name}
-                                        </MenuItem>
-                                    ))}
-                            </Select>
-                        </FormControl>
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label="Шаг шедуллера"
+                            type="number"
+                            value={actionData.scheduler_step || 1}
+                            onChange={(e) => updateActionData('scheduler_step', parseInt(e.target.value) || 1)}
+                            inputProps={{ min: 1 }}
+                            helperText="Начальный шаг в шедуллере (обычно 1)"
+                        />
                     </>
                 );
 
-            case 'update_lead':
+            case 'change_priority':
                 return (
                     <>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                            Выберите поля для обновления:
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                            Изменение приоритета для контакта, который уже находится в системе автообзвона
                         </Typography>
-                        {dataStore.amocrmFields.slice(0, 5).map((field) => (
-                            <Box key={field.id} sx={{ mb: 1 }}>
-                                <TextField
-                                    fullWidth
-                                    size="small"
-                                    label={field.name}
-                                    value={actionData.fields?.[field.id] || ''}
-                                    onChange={(e) => {
-                                        const fields = { ...actionData.fields, [field.id]: e.target.value };
-                                        updateActionData('fields', fields);
-                                    }}
-                                    helperText={`Тип: ${field.type}`}
-                                />
-                            </Box>
-                        ))}
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label="Новый приоритет"
+                            type="number"
+                            value={actionData.priority || 50}
+                            onChange={(e) => updateActionData('priority', parseInt(e.target.value) || 0)}
+                            inputProps={{ min: 0, max: 100 }}
+                            helperText="0-100, чем выше число, тем выше приоритет"
+                        />
                     </>
                 );
 
-            case 'add_note':
-                return (
-                    <TextField
-                        fullWidth
-                        size="small"
-                        label="Текст примечания"
-                        multiline
-                        rows={3}
-                        value={actionData.text || ''}
-                        onChange={(e) => updateActionData('text', e.target.value)}
-                        helperText="Используйте {{field_name}} для вставки значений полей"
-                    />
-                );
-
-            case 'send_notification':
+            case 'change_scheduler_step':
                 return (
                     <>
-                        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-                            <InputLabel>Тип уведомления</InputLabel>
-                            <Select
-                                value={actionData.notification_type || 'email'}
-                                onChange={(e) => updateActionData('notification_type', e.target.value)}
-                                label="Тип уведомления"
-                            >
-                                <MenuItem value="email">Email</MenuItem>
-                                <MenuItem value="sms">SMS</MenuItem>
-                                <MenuItem value="push">Push</MenuItem>
-                                <MenuItem value="telegram">Telegram</MenuItem>
-                            </Select>
-                        </FormControl>
-
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                            Изменение текущего шага в шедуллере для контакта, который уже находится в системе автообзвона
+                        </Typography>
                         <TextField
                             fullWidth
                             size="small"
-                            label="Получатель"
-                            value={actionData.recipient || ''}
-                            onChange={(e) => updateActionData('recipient', e.target.value)}
-                            sx={{ mb: 1 }}
-                            helperText="Email, телефон или ID пользователя"
-                        />
-
-                        <TextField
-                            fullWidth
-                            size="small"
-                            label="Тема (для email)"
-                            value={actionData.subject || ''}
-                            onChange={(e) => updateActionData('subject', e.target.value)}
-                            sx={{ mb: 1 }}
-                            disabled={actionData.notification_type !== 'email'}
-                        />
-
-                        <TextField
-                            fullWidth
-                            size="small"
-                            label="Сообщение"
-                            multiline
-                            rows={3}
-                            value={actionData.message || ''}
-                            onChange={(e) => updateActionData('message', e.target.value)}
-                            helperText="Используйте {{field_name}} для вставки значений"
+                            label="Новый шаг шедуллера"
+                            type="number"
+                            value={actionData.scheduler_step || 1}
+                            onChange={(e) => updateActionData('scheduler_step', parseInt(e.target.value) || 1)}
+                            inputProps={{ min: 1 }}
+                            helperText="Установить конкретный шаг в шедуллере"
                         />
                     </>
+                );
+
+            case 'remove_from_dialer':
+                return (
+                    <Box>
+                        <Typography variant="body2" color="text.secondary">
+                            Контакт будет полностью удален из системы автообзвона
+                        </Typography>
+                        <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                            ⚠️ Это действие необратимо. Контакт будет удален из всех бакетов и кампаний.
+                        </Typography>
+                    </Box>
                 );
 
             default:
@@ -237,8 +296,8 @@ const ActionNodeComponent: React.FC<ActionNodeProps> = ({ data, id, selected }) 
         <Paper
             sx={{
                 p: 2,
-                minWidth: 300,
-                maxWidth: 400,
+                minWidth: 350,
+                maxWidth: 450,
                 border: selected ? '2px solid #1976d2' : '1px solid #ccc',
                 bgcolor: selected ? 'action.hover' : 'background.paper',
                 boxShadow: selected ? 3 : 1,
@@ -266,37 +325,21 @@ const ActionNodeComponent: React.FC<ActionNodeProps> = ({ data, id, selected }) 
                     <InputLabel>Тип действия</InputLabel>
                     <Select
                         value={actionType}
-                        onChange={(e) => handleActionTypeChange(e.target.value)}
+                        onChange={(e) => handleActionTypeChange(e.target.value as ActionType)}
                         label="Тип действия"
                     >
-                        <MenuItem value="send_to_dialer">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <CallIcon fontSize="small" />
-                                Отправить в автообзвон
-                            </Box>
-                        </MenuItem>
-                        <MenuItem value="update_lead">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <UpdateIcon fontSize="small" />
-                                Обновить сделку
-                            </Box>
-                        </MenuItem>
-                        <MenuItem value="add_note">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <NoteAddIcon fontSize="small" />
-                                Добавить примечание
-                            </Box>
-                        </MenuItem>
-                        <MenuItem value="send_notification">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <NotificationsIcon fontSize="small" />
-                                Отправить уведомление
-                            </Box>
-                        </MenuItem>
+                        {Object.entries(actionLabels).map(([value, label]) => (
+                            <MenuItem key={value} value={value}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    {actionIcons[value as ActionType]}
+                                    {label}
+                                </Box>
+                            </MenuItem>
+                        ))}
                     </Select>
                 </FormControl>
 
-                <Box sx={{ minHeight: 200 }}>
+                <Box sx={{ minHeight: 150 }}>
                     {renderActionConfig()}
                 </Box>
             </Box>
@@ -310,5 +353,4 @@ const ActionNodeComponent: React.FC<ActionNodeProps> = ({ data, id, selected }) 
     );
 };
 
-// Правильный порядок оборачивания: сначала observer, потом memo
 export const ActionNode = memo(observer(ActionNodeComponent));
